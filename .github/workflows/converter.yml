@@ -1,0 +1,1241 @@
+name: Build Converter App
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+      - name: Create template project
+        run: |
+          mkdir -p template template/app template/app/src/main template/app/src/main/java/com/webapp/shell
+          cat > template/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "Template"
+          include ':app'
+          EOF
+          cat > template/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF
+          cat > template/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          EOF
+          cat > template/app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.webapp.shell'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.placeholder.appid"
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              lint {
+                  checkReleaseBuilds false
+                  abortOnError false
+              }
+          }
+          EOF
+          cat > template/app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:label="PLACEHOLDERAPPNAME"
+                  android:icon="@mipmap/ic_launcher"
+                  android:allowBackup="true"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity
+                      android:name="com.webapp.shell.MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize"
+                      android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > template/app/src/main/java/com/webapp/shell/MainActivity.java <<'EOF'
+          package com.webapp.shell;
+
+          import android.app.Activity;
+          import android.app.AlertDialog;
+          import android.content.ActivityNotFoundException;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.webkit.JsPromptResult;
+          import android.webkit.JsResult;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.EditText;
+
+          public class MainActivity extends Activity {
+              private static final int REQ_FILE = 1;
+              private WebView web;
+              private ValueCallback<Uri[]> fileCb;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  web = new WebView(this);
+                  setContentView(web);
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setAllowFileAccess(true);
+                  s.setAllowContentAccess(true);
+                  s.setAllowFileAccessFromFileURLs(true);
+                  s.setAllowUniversalAccessFromFileURLs(true);
+                  s.setMediaPlaybackRequiresUserGesture(false);
+
+                  web.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                          if (url.startsWith("file:")) return false;
+                          try {
+                              startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                          } catch (Exception ignored) {
+                          }
+                          return true;
+                      }
+                  });
+
+                  web.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public boolean onJsAlert(WebView view, String url, String message, final JsResult result) {
+                          new AlertDialog.Builder(MainActivity.this)
+                                  .setMessage(message)
+                                  .setPositiveButton(android.R.string.ok, (d, w) -> result.confirm())
+                                  .setOnCancelListener(d -> result.cancel())
+                                  .show();
+                          return true;
+                      }
+
+                      @Override
+                      public boolean onJsConfirm(WebView view, String url, String message, final JsResult result) {
+                          new AlertDialog.Builder(MainActivity.this)
+                                  .setMessage(message)
+                                  .setPositiveButton(android.R.string.ok, (d, w) -> result.confirm())
+                                  .setNegativeButton(android.R.string.cancel, (d, w) -> result.cancel())
+                                  .setOnCancelListener(d -> result.cancel())
+                                  .show();
+                          return true;
+                      }
+
+                      @Override
+                      public boolean onJsPrompt(WebView view, String url, String message, String defaultValue,
+                                                final JsPromptResult result) {
+                          final EditText input = new EditText(MainActivity.this);
+                          input.setText(defaultValue);
+                          new AlertDialog.Builder(MainActivity.this)
+                                  .setMessage(message)
+                                  .setView(input)
+                                  .setPositiveButton(android.R.string.ok, (d, w) -> result.confirm(input.getText().toString()))
+                                  .setNegativeButton(android.R.string.cancel, (d, w) -> result.cancel())
+                                  .setOnCancelListener(d -> result.cancel())
+                                  .show();
+                          return true;
+                      }
+
+                      @Override
+                      public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> callback,
+                                                       FileChooserParams params) {
+                          if (fileCb != null) fileCb.onReceiveValue(null);
+                          fileCb = callback;
+                          try {
+                              startActivityForResult(params.createIntent(), REQ_FILE);
+                          } catch (ActivityNotFoundException e) {
+                              fileCb = null;
+                              return false;
+                          }
+                          return true;
+                      }
+                  });
+
+                  if (savedInstanceState == null) {
+                      web.loadUrl("file:///android_asset/index.html");
+                  } else {
+                      web.restoreState(savedInstanceState);
+                  }
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (requestCode == REQ_FILE && fileCb != null) {
+                      fileCb.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data));
+                      fileCb = null;
+                  }
+              }
+
+              @Override
+              protected void onSaveInstanceState(Bundle outState) {
+                  super.onSaveInstanceState(outState);
+                  web.saveState(outState);
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (web.canGoBack()) web.goBack();
+                  else super.onBackPressed();
+              }
+          }
+          EOF
+
+      - name: Create converter project
+        run: |
+          mkdir -p converter converter/app converter/app/src/main converter/app/src/main/assets converter/app/src/main/java/com/webapp/maker converter/app/src/main/res/values
+          cat > converter/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "WebAppMaker"
+          include ':app'
+          EOF
+          cat > converter/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF
+          cat > converter/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          EOF
+          cat > converter/app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.webapp.maker'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.webapp.maker"
+                  minSdk 29
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              lint {
+                  abortOnError false
+              }
+          }
+          dependencies {
+              implementation 'com.android.tools.build:apksig:8.5.2'
+          }
+          EOF
+          cat > converter/app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+              <application
+                  android:label="@string/app_name"
+                  android:icon="@mipmap/ic_launcher"
+                  android:allowBackup="false"
+                  android:largeHeap="true"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize"
+                      android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > converter/app/src/main/res/values/strings.xml <<'EOF'
+          <resources><string name="app_name">ویب ایپ میکر</string></resources>
+          EOF
+          cat > converter/app/src/main/assets/ui.html <<'EOF'
+          <!DOCTYPE html>
+          <html lang="ur" dir="rtl"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>ویب ایپ میکر</title>
+          <style>
+          :root{--bg:#f3f6fb;--card:#fff;--tx:#14213d;--mut:#6b7a90;--pri:#1e64dc;--ok:#13804a;--err:#c62828;--bd:#e3e9f2}
+          @media (prefers-color-scheme:dark){:root{--bg:#0f1520;--card:#18212f;--tx:#e8eefb;--mut:#93a1b8;--bd:#263246;--pri:#5b94ff;--ok:#4cc38a;--err:#ff7b7b}}
+          *{box-sizing:border-box}
+          body{margin:0;background:var(--bg);color:var(--tx);font-family:"Noto Nastaliq Urdu","Noto Naskh Arabic",system-ui,sans-serif;line-height:2;padding:16px 14px 40px}
+          h1{font-size:22px;margin:4px 0 2px}
+          .sub{color:var(--mut);font-size:14px;margin:0 0 14px}
+          .card{background:var(--card);border-radius:16px;padding:14px 16px;margin-bottom:12px;box-shadow:0 2px 10px rgba(0,0,0,.08);border:1px solid var(--bd)}
+          .step{font-weight:bold;margin-bottom:6px}
+          .step span{display:inline-block;background:var(--pri);color:#fff;border-radius:50%;width:26px;height:26px;line-height:26px;text-align:center;font-size:14px;margin-left:8px}
+          button{font:inherit;border:0;border-radius:12px;padding:8px 16px;cursor:pointer}
+          .btn{background:var(--pri);color:#fff;width:100%}
+          .btn2{background:transparent;color:var(--pri);border:1.5px solid var(--pri);width:100%}
+          .btn:disabled{opacity:.5}
+          input{font:inherit;width:100%;padding:8px 12px;border-radius:10px;border:1.5px solid var(--bd);background:var(--bg);color:var(--tx)}
+          label{display:block;font-size:13px;color:var(--mut);margin-top:6px}
+          .info{font-size:14px;color:var(--mut);margin-top:6px;word-break:break-all}
+          .info.good{color:var(--ok)}
+          .info.bad{color:var(--err)}
+          #prev{width:56px;height:56px;border-radius:12px;display:none;margin-top:8px}
+          #status{display:none;text-align:center}
+          #result{display:none}
+          .big{font-size:18px;color:var(--ok);font-weight:bold}
+          .row{display:flex;gap:8px;margin-top:8px}
+          .row>*{flex:1}
+          </style></head><body>
+          <h1>ویب ایپ میکر</h1>
+          <p class="sub">HTML یا ZIP کو آف لائن APK میں بدلیں، بغیر انٹرنیٹ اور بغیر اشتہار</p>
+
+          <div class="card">
+            <div class="step"><span>1</span>HTML یا ZIP فائل</div>
+            <button class="btn" id="bMain">📂 فائل چنیں</button>
+            <div class="info" id="mainInfo">ابھی کوئی فائل نہیں چنی</div>
+          </div>
+
+          <div class="card">
+            <div class="step"><span>2</span>ایپ کی معلومات</div>
+            <label>ایپ کا نام</label>
+            <input id="name" placeholder="مثلاً علی کی دکان" maxlength="60">
+            <label>Package ID (ہر ایپ کا الگ ہو)</label>
+            <input id="appid" dir="ltr" autocapitalize="none" autocomplete="off" spellcheck="false">
+            <div class="info">اسی نام سے دوبارہ بنائیں گے تو پرانی ایپ کی جگہ نئی ایپ لے لے گی۔</div>
+          </div>
+
+          <div class="card">
+            <div class="step"><span>3</span>آئیکن (اختیاری)</div>
+            <button class="btn2" id="bIcon">🖼️ تصویر چنیں</button>
+            <img id="prev" alt="">
+            <div class="info" id="iconInfo">چوکور تصویر بہتر رہے گی</div>
+          </div>
+
+          <button class="btn" id="bBuild" style="font-size:18px;padding:12px">⚙️ APK بنائیں</button>
+
+          <div class="card" id="status" style="margin-top:12px"><div id="statusTxt"></div></div>
+
+          <div class="card" id="result" style="margin-top:12px">
+            <div class="big">✅ APK تیار ہے</div>
+            <div class="info" id="resTxt"></div>
+            <div class="row">
+              <button class="btn" id="bInstall">📲 انسٹال کریں</button>
+              <button class="btn2" id="bNew">➕ نئی ایپ</button>
+            </div>
+            <div class="info">فائل Downloads ← WebApps فولڈر میں محفوظ ہے، وہاں سے دوسروں کو بھیج سکتے ہیں۔</div>
+          </div>
+
+          <script>
+          var $=function(i){return document.getElementById(i)};
+          var hasFile=false, building=false, edited=false, autoId='';
+          var ids={};
+          try{ids=JSON.parse(localStorage.getItem('ids')||'{}')}catch(e){}
+          function rnd(){var c='abcdefghijklmnopqrstuvwxyz0123456789',s='';for(var i=0;i<6;i++)s+=c.charAt(Math.floor(Math.random()*c.length));return 'com.webapp.a'+s;}
+          function used(id){for(var k in ids){if(ids[k]===id)return true}return false}
+          function newId(){var x=rnd();while(used(x))x=rnd();return x}
+          function setId(v){autoId=v;$('appid').value=v}
+          setId(newId());
+          $('appid').addEventListener('input',function(){edited=true});
+          $('name').addEventListener('input',function(){
+            if(edited)return;
+            var n=$('name').value.trim();
+            if(ids[n])setId(ids[n]);
+            else if(used(autoId))setId(newId());
+          });
+          function fmt(b){return b>1048576?(b/1048576).toFixed(1)+' MB':Math.max(1,Math.round(b/1024))+' KB'}
+          function show(el,on){$(el).style.display=on?'block':'none'}
+          function setMain(t,cls){var e=$('mainInfo');e.textContent=t;e.className='info '+(cls||'')}
+          $('bMain').onclick=function(){setMain('کھل رہی ہے…','');Android.pickMain()};
+          $('bIcon').onclick=function(){Android.pickIcon()};
+          $('bNew').onclick=function(){
+            Android.reset();hasFile=false;edited=false;
+            setMain('ابھی کوئی فائل نہیں چنی','');$('name').value='';setId(newId());
+            $('prev').style.display='none';$('iconInfo').textContent='چوکور تصویر بہتر رہے گی';
+            show('result',false);show('status',false);
+          };
+          $('bBuild').onclick=function(){
+            if(building)return;
+            var name=$('name').value.trim(),id=$('appid').value.trim();
+            if(!hasFile){alert('پہلے HTML یا ZIP فائل چنیں');return}
+            if(!name){alert('ایپ کا نام لکھیں');return}
+            if(!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(id)){alert('Package ID درست نہیں۔ صرف چھوٹے انگریزی حروف، اعداد اور نقطے، مثلاً com.ali.shop');return}
+            building=true;$('bBuild').disabled=true;show('result',false);
+            show('status',true);$('statusTxt').style.color='';$('statusTxt').textContent='شروع ہو رہا ہے…';
+            Android.build(name,id);
+          };
+          $('bInstall').onclick=function(){Android.install()};
+          window.onNative=function(o){
+            if(o.ev==='main'){hasFile=true;setMain((o.zip?'ZIP: ':'HTML: ')+o.name+' ('+fmt(o.size)+')','good');
+              if(!$('name').value){var n=o.name.replace(/\.(html?|zip)$/i,'');$('name').value=n;$('name').dispatchEvent(new Event('input'))}}
+            else if(o.ev==='main_error'){hasFile=false;setMain(o.msg,'bad')}
+            else if(o.ev==='icon'){$('prev').src=o.data;$('prev').style.display='block';$('iconInfo').textContent='آئیکن تیار'}
+            else if(o.ev==='icon_error'){$('iconInfo').textContent=o.msg}
+            else if(o.ev==='progress'){$('statusTxt').textContent=o.msg}
+            else if(o.ev==='done'){
+              building=false;$('bBuild').disabled=false;show('status',false);
+              var n=$('name').value.trim();ids[n]=$('appid').value.trim();
+              try{localStorage.setItem('ids',JSON.stringify(ids))}catch(e){}
+              $('resTxt').textContent=o.file;show('result',true);
+            }
+            else if(o.ev==='error'){
+              building=false;$('bBuild').disabled=false;
+              $('statusTxt').style.color='var(--err)';$('statusTxt').textContent='غلطی: '+o.msg;
+            }
+          };
+          </script></body></html>
+          EOF
+          cat > converter/app/src/main/java/com/webapp/maker/MainActivity.java <<'EOF'
+          package com.webapp.maker;
+
+          import android.app.Activity;
+          import android.content.ContentValues;
+          import android.content.Intent;
+          import android.database.Cursor;
+          import android.graphics.Bitmap;
+          import android.graphics.BitmapFactory;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.os.Environment;
+          import android.provider.MediaStore;
+          import android.provider.OpenableColumns;
+          import android.provider.Settings;
+          import android.util.Base64;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Toast;
+
+          import org.json.JSONObject;
+
+          import java.io.ByteArrayOutputStream;
+          import java.io.File;
+          import java.io.FileInputStream;
+          import java.io.FileOutputStream;
+          import java.io.IOException;
+          import java.io.InputStream;
+          import java.io.OutputStream;
+
+          public class MainActivity extends Activity {
+              private static final int REQ_MAIN = 11;
+              private static final int REQ_ICON = 12;
+
+              private WebView web;
+              private File userFile;
+              private boolean userIsZip;
+              private byte[] iconPng;
+              private Uri outUri;
+              private volatile boolean busy = false;
+
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  web = new WebView(this);
+                  setContentView(web);
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  web.setWebViewClient(new WebViewClient());
+                  web.addJavascriptInterface(new Bridge(), "Android");
+                  web.loadUrl("file:///android_asset/ui.html");
+              }
+
+              public class Bridge {
+                  @JavascriptInterface
+                  public void pickMain() {
+                      runOnUiThread(() -> {
+                          Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                          i.addCategory(Intent.CATEGORY_OPENABLE);
+                          i.setType("*/*");
+                          startActivityForResult(i, REQ_MAIN);
+                      });
+                  }
+
+                  @JavascriptInterface
+                  public void pickIcon() {
+                      runOnUiThread(() -> {
+                          Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                          i.addCategory(Intent.CATEGORY_OPENABLE);
+                          i.setType("image/*");
+                          startActivityForResult(i, REQ_ICON);
+                      });
+                  }
+
+                  @JavascriptInterface
+                  public void build(final String name, final String appId) {
+                      new Thread(() -> doBuild(name, appId)).start();
+                  }
+
+                  @JavascriptInterface
+                  public void install() {
+                      runOnUiThread(() -> doInstall());
+                  }
+
+                  @JavascriptInterface
+                  public void reset() {
+                      userFile = null;
+                      iconPng = null;
+                      outUri = null;
+                  }
+              }
+
+              @Override
+              protected void onActivityResult(int req, int res, Intent data) {
+                  super.onActivityResult(req, res, data);
+                  if (res != RESULT_OK || data == null || data.getData() == null) return;
+                  Uri u = data.getData();
+                  if (req == REQ_MAIN) handleMain(u);
+                  else if (req == REQ_ICON) handleIcon(u);
+              }
+
+              // ---------- helpers ----------
+              private void sendObj(JSONObject o) {
+                  final String code = "window.onNative(" + o.toString() + ")";
+                  runOnUiThread(() -> web.evaluateJavascript(code, null));
+              }
+
+              private void send(String ev, String key, String val) {
+                  try {
+                      JSONObject o = new JSONObject();
+                      o.put("ev", ev);
+                      if (key != null) o.put(key, val);
+                      sendObj(o);
+                  } catch (Exception ignored) {
+                  }
+              }
+
+              private static String msg(Throwable t) {
+                  String m = t.getMessage();
+                  if (m == null) m = t.getClass().getSimpleName();
+                  return m;
+              }
+
+              private String queryName(Uri u) {
+                  String n = "file";
+                  try (Cursor c = getContentResolver().query(u, null, null, null, null)) {
+                      if (c != null && c.moveToFirst()) {
+                          int i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                          if (i >= 0 && c.getString(i) != null) n = c.getString(i);
+                      }
+                  } catch (Exception ignored) {
+                  }
+                  return n;
+              }
+
+              private static void copyStream(InputStream in, OutputStream out) throws IOException {
+                  byte[] buf = new byte[65536];
+                  int n;
+                  while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+              }
+
+              private long copyToFile(Uri u, File f) throws IOException {
+                  try (InputStream in = getContentResolver().openInputStream(u);
+                       OutputStream out = new FileOutputStream(f)) {
+                      if (in == null) throw new IOException("فائل نہیں کھل سکی");
+                      byte[] buf = new byte[65536];
+                      long total = 0;
+                      int n;
+                      while ((n = in.read(buf)) > 0) {
+                          out.write(buf, 0, n);
+                          total += n;
+                      }
+                      return total;
+                  }
+              }
+
+              private static boolean looksLikeZip(File f) throws IOException {
+                  try (InputStream in = new FileInputStream(f)) {
+                      byte[] h = new byte[4];
+                      int n = in.read(h);
+                      return n == 4 && h[0] == 0x50 && h[1] == 0x4B && h[2] == 0x03 && h[3] == 0x04;
+                  }
+              }
+
+              private byte[] readAsset(String name) throws IOException {
+                  try (InputStream in = getAssets().open(name)) {
+                      return ApkMaker.readAll(in);
+                  }
+              }
+
+              private static String safeName(String name) {
+                  String s = name.replaceAll("[\\\\/:*?\"<>|\\r\\n\\t]", "_").trim();
+                  if (s.isEmpty()) s = "app";
+                  return s;
+              }
+
+              // ---------- picking ----------
+              private void handleMain(final Uri u) {
+                  new Thread(() -> {
+                      try {
+                          String name = queryName(u);
+                          File f = new File(getCacheDir(), "user.bin");
+                          long size = copyToFile(u, f);
+                          if (size <= 0) throw new IOException("فائل خالی ہے");
+                          boolean zip = looksLikeZip(f);
+                          String lower = name.toLowerCase();
+                          if (!zip && !(lower.endsWith(".html") || lower.endsWith(".htm"))) {
+                              throw new IOException("صرف HTML یا ZIP فائل چنیں");
+                          }
+                          if (zip) ApkMaker.checkZip(f);
+                          userFile = f;
+                          userIsZip = zip;
+                          JSONObject o = new JSONObject();
+                          o.put("ev", "main");
+                          o.put("name", name);
+                          o.put("size", size);
+                          o.put("zip", zip);
+                          sendObj(o);
+                      } catch (Throwable t) {
+                          send("main_error", "msg", msg(t));
+                      }
+                  }).start();
+              }
+
+              private void handleIcon(final Uri u) {
+                  new Thread(() -> {
+                      try {
+                          BitmapFactory.Options o = new BitmapFactory.Options();
+                          o.inJustDecodeBounds = true;
+                          try (InputStream in = getContentResolver().openInputStream(u)) {
+                              BitmapFactory.decodeStream(in, null, o);
+                          }
+                          int sample = 1;
+                          while (o.outWidth / sample > 1024 || o.outHeight / sample > 1024) sample *= 2;
+                          BitmapFactory.Options o2 = new BitmapFactory.Options();
+                          o2.inSampleSize = sample;
+                          Bitmap bmp;
+                          try (InputStream in = getContentResolver().openInputStream(u)) {
+                              bmp = BitmapFactory.decodeStream(in, null, o2);
+                          }
+                          if (bmp == null) throw new IOException("تصویر نہیں کھل سکی");
+                          int w = bmp.getWidth();
+                          int h = bmp.getHeight();
+                          int side = Math.min(w, h);
+                          Bitmap sq = Bitmap.createBitmap(bmp, (w - side) / 2, (h - side) / 2, side, side);
+                          Bitmap icon = Bitmap.createScaledBitmap(sq, 192, 192, true);
+                          ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                          icon.compress(Bitmap.CompressFormat.PNG, 100, bo);
+                          iconPng = bo.toByteArray();
+                          Bitmap prev = Bitmap.createScaledBitmap(icon, 96, 96, true);
+                          ByteArrayOutputStream bp = new ByteArrayOutputStream();
+                          prev.compress(Bitmap.CompressFormat.PNG, 100, bp);
+                          String b64 = Base64.encodeToString(bp.toByteArray(), Base64.NO_WRAP);
+                          send("icon", "data", "data:image/png;base64," + b64);
+                      } catch (Throwable t) {
+                          send("icon_error", "msg", msg(t));
+                      }
+                  }).start();
+              }
+
+              // ---------- build ----------
+              private void doBuild(String name, String appId) {
+                  if (busy) return;
+                  busy = true;
+                  try {
+                      if (userFile == null) throw new IOException("پہلے HTML یا ZIP فائل چنیں");
+                      name = name.trim();
+                      if (name.isEmpty() || name.length() > 60) throw new IOException("ایپ کا نام 1 سے 60 حروف کا ہو");
+                      if (!appId.matches("^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$")) {
+                          throw new IOException("Package ID درست نہیں (مثلاً com.ali.shop)");
+                      }
+                      send("progress", "msg", "ایپ تیار ہو رہی ہے…");
+                      File tpl = new File(getCacheDir(), "template.apk");
+                      try (InputStream in = getAssets().open("template.apk");
+                           OutputStream out = new FileOutputStream(tpl)) {
+                          copyStream(in, out);
+                      }
+                      File unsigned = new File(getCacheDir(), "unsigned.apk");
+                      File signed = new File(getCacheDir(), "signed.apk");
+                      ApkMaker.make(tpl, userFile, userIsZip, iconPng, name, appId, unsigned);
+
+                      send("progress", "msg", "سائن ہو رہی ہے…");
+                      ApkSign.sign(unsigned, signed, readAsset("sign.pk8"), readAsset("sign.crt"));
+
+                      send("progress", "msg", "Downloads میں محفوظ ہو رہی ہے…");
+                      String fname = safeName(name) + ".apk";
+                      ContentValues cv = new ContentValues();
+                      cv.put(MediaStore.MediaColumns.DISPLAY_NAME, fname);
+                      cv.put(MediaStore.MediaColumns.MIME_TYPE, "application/vnd.android.package-archive");
+                      cv.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/WebApps");
+                      Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                      if (uri == null) throw new IOException("Downloads میں فائل نہیں بن سکی");
+                      try (OutputStream os = getContentResolver().openOutputStream(uri);
+                           InputStream in = new FileInputStream(signed)) {
+                          if (os == null) throw new IOException("فائل لکھی نہیں جا سکی");
+                          copyStream(in, os);
+                      }
+                      outUri = uri;
+                      unsigned.delete();
+                      signed.delete();
+                      send("done", "file", fname);
+                  } catch (Throwable t) {
+                      send("error", "msg", msg(t));
+                  } finally {
+                      busy = false;
+                  }
+              }
+
+              private void doInstall() {
+                  if (outUri == null) return;
+                  try {
+                      if (!getPackageManager().canRequestPackageInstalls()) {
+                          Toast.makeText(this, "اس ایپ کو انسٹال کرنے کی اجازت دیں، پھر دوبارہ دبائیں", Toast.LENGTH_LONG).show();
+                          Intent s = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                  Uri.parse("package:" + getPackageName()));
+                          startActivity(s);
+                          return;
+                      }
+                      Intent i = new Intent(Intent.ACTION_VIEW);
+                      i.setDataAndType(outUri, "application/vnd.android.package-archive");
+                      i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                      startActivity(i);
+                  } catch (Exception e) {
+                      Toast.makeText(this, "فائل Downloads/WebApps میں موجود ہے، وہاں سے کھول کر انسٹال کریں", Toast.LENGTH_LONG).show();
+                  }
+              }
+          }
+          EOF
+          cat > converter/app/src/main/java/com/webapp/maker/ApkMaker.java <<'EOF'
+          package com.webapp.maker;
+
+          import java.io.BufferedOutputStream;
+          import java.io.ByteArrayOutputStream;
+          import java.io.File;
+          import java.io.FileInputStream;
+          import java.io.FileOutputStream;
+          import java.io.IOException;
+          import java.io.InputStream;
+          import java.util.Enumeration;
+          import java.util.HashMap;
+          import java.util.Map;
+          import java.util.zip.ZipEntry;
+          import java.util.zip.ZipFile;
+
+          /** Builds an unsigned APK from the template APK + user's HTML/ZIP. */
+          public class ApkMaker {
+              private static final long MAX_FILE = 64L * 1024 * 1024;
+
+              static byte[] readAll(InputStream in) throws IOException {
+                  ByteArrayOutputStream bo = new ByteArrayOutputStream();
+                  byte[] buf = new byte[65536];
+                  int n;
+                  while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+                  return bo.toByteArray();
+              }
+
+              static String clean(String raw) {
+                  String n = raw.replace('\\', '/');
+                  while (n.startsWith("/")) n = n.substring(1);
+                  if (n.isEmpty()) return null;
+                  for (String seg : n.split("/")) {
+                      if (seg.equals("..")) return null;
+                  }
+                  if (n.startsWith("__MACOSX/") || n.endsWith(".DS_Store")) return null;
+                  return n;
+              }
+
+              /** Returns the folder prefix (possibly empty) where index.html lives inside the user's ZIP. */
+              public static String findPrefix(File zipFile) throws IOException {
+                  String bestPrefix = null;
+                  int bestDepth = Integer.MAX_VALUE;
+                  try (ZipFile z = new ZipFile(zipFile)) {
+                      Enumeration<? extends ZipEntry> en = z.entries();
+                      while (en.hasMoreElements()) {
+                          ZipEntry e = en.nextElement();
+                          if (e.isDirectory()) continue;
+                          String n = clean(e.getName());
+                          if (n == null) continue;
+                          String lower = n.toLowerCase();
+                          if (lower.equals("index.html") || lower.endsWith("/index.html")) {
+                              int depth = 0;
+                              for (int i = 0; i < n.length(); i++) {
+                                  if (n.charAt(i) == '/') depth++;
+                              }
+                              if (depth < bestDepth) {
+                                  bestDepth = depth;
+                                  bestPrefix = n.substring(0, n.length() - "index.html".length());
+                              }
+                          }
+                      }
+                  }
+                  if (bestPrefix == null) throw new IOException("ZIP کے اندر index.html نہیں ملی");
+                  return bestPrefix;
+              }
+
+              public static void checkZip(File zipFile) throws IOException {
+                  findPrefix(zipFile);
+              }
+
+              public static void make(File templateApk, File userFile, boolean userIsZip, byte[] iconPng,
+                                      String appName, String appId, File out) throws IOException {
+                  Map<String, String> rep = new HashMap<>();
+                  rep.put("com.placeholder.appid", appId);
+                  rep.put("PLACEHOLDERAPPNAME", appName);
+
+                  try (ZipFile tpl = new ZipFile(templateApk);
+                       ZipWriter zw = new ZipWriter(new BufferedOutputStream(new FileOutputStream(out), 65536))) {
+
+                      ZipEntry me = tpl.getEntry("AndroidManifest.xml");
+                      if (me == null) throw new IOException("Template has no manifest");
+                      byte[] manifest;
+                      try (InputStream in = tpl.getInputStream(me)) {
+                          manifest = readAll(in);
+                      }
+                      zw.add("AndroidManifest.xml", AxmlPatcher.replaceStrings(manifest, rep), false);
+
+                      Enumeration<? extends ZipEntry> en = tpl.entries();
+                      while (en.hasMoreElements()) {
+                          ZipEntry e = en.nextElement();
+                          String name = e.getName();
+                          if (e.isDirectory()) continue;
+                          if (name.equals("AndroidManifest.xml")) continue;
+                          if (name.startsWith("META-INF/")) continue;
+                          if (name.startsWith("assets/")) continue;
+                          byte[] data;
+                          try (InputStream in = tpl.getInputStream(e)) {
+                              data = readAll(in);
+                          }
+                          if (iconPng != null && name.startsWith("res/") && name.endsWith("/ic_launcher.png")) {
+                              data = iconPng;
+                          }
+                          zw.add(name, data, name.equals("resources.arsc"));
+                      }
+                      if (!zw.has("classes.dex") || !zw.has("resources.arsc")) {
+                          throw new IOException("Template APK is incomplete");
+                      }
+
+                      if (!userIsZip) {
+                          byte[] html;
+                          try (InputStream in = new FileInputStream(userFile)) {
+                              html = readAll(in);
+                          }
+                          zw.add("assets/index.html", html, false);
+                      } else {
+                          String prefix = findPrefix(userFile);
+                          try (ZipFile uz = new ZipFile(userFile)) {
+                              Enumeration<? extends ZipEntry> ue = uz.entries();
+                              while (ue.hasMoreElements()) {
+                                  ZipEntry e = ue.nextElement();
+                                  if (e.isDirectory()) continue;
+                                  String n = clean(e.getName());
+                                  if (n == null || !n.startsWith(prefix)) continue;
+                                  String rel = n.substring(prefix.length());
+                                  if (rel.isEmpty()) continue;
+                                  if (rel.equalsIgnoreCase("index.html")) rel = "index.html";
+                                  if (e.getSize() > MAX_FILE) {
+                                      throw new IOException("فائل بہت بڑی ہے (64MB سے زیادہ): " + rel);
+                                  }
+                                  byte[] data;
+                                  try (InputStream in = uz.getInputStream(e)) {
+                                      data = readAll(in);
+                                  }
+                                  zw.add("assets/" + rel, data, false);
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+          cat > converter/app/src/main/java/com/webapp/maker/ApkSign.java <<'EOF'
+          package com.webapp.maker;
+
+          import com.android.apksig.ApkSigner;
+          import com.android.apksig.ApkVerifier;
+
+          import java.io.ByteArrayInputStream;
+          import java.io.File;
+          import java.io.IOException;
+          import java.security.KeyFactory;
+          import java.security.PrivateKey;
+          import java.security.cert.CertificateFactory;
+          import java.security.cert.X509Certificate;
+          import java.security.spec.PKCS8EncodedKeySpec;
+          import java.util.Collections;
+
+          public class ApkSign {
+              public static void sign(File in, File out, byte[] pk8, byte[] crt) throws Exception {
+                  PrivateKey key = KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(pk8));
+                  X509Certificate cert = (X509Certificate) CertificateFactory.getInstance("X.509")
+                          .generateCertificate(new ByteArrayInputStream(crt));
+                  ApkSigner.SignerConfig sc = new ApkSigner.SignerConfig.Builder(
+                          "webmaker", key, Collections.singletonList(cert)).build();
+                  if (out.exists()) out.delete();
+                  ApkSigner signer = new ApkSigner.Builder(Collections.singletonList(sc))
+                          .setInputApk(in)
+                          .setOutputApk(out)
+                          .setMinSdkVersion(21)
+                          .setV1SigningEnabled(true)
+                          .setV2SigningEnabled(true)
+                          .setV3SigningEnabled(true)
+                          .build();
+                  signer.sign();
+                  ApkVerifier.Result r = new ApkVerifier.Builder(out).build().verify();
+                  if (!r.isVerified()) {
+                      throw new IOException("Signature check failed: " + r.getErrors());
+                  }
+              }
+          }
+          EOF
+          cat > converter/app/src/main/java/com/webapp/maker/AxmlPatcher.java <<'EOF'
+          package com.webapp.maker;
+
+          import java.io.ByteArrayOutputStream;
+          import java.io.IOException;
+          import java.nio.ByteBuffer;
+          import java.nio.ByteOrder;
+          import java.nio.charset.StandardCharsets;
+          import java.util.Arrays;
+          import java.util.HashSet;
+          import java.util.Map;
+          import java.util.Set;
+
+          /** Replaces strings inside the string pool of a compiled (binary) AndroidManifest.xml. */
+          public class AxmlPatcher {
+
+              public static byte[] replaceStrings(byte[] in, Map<String, String> rep) throws IOException {
+                  ByteBuffer b = ByteBuffer.wrap(in).order(ByteOrder.LITTLE_ENDIAN);
+                  if (in.length < 40 || (b.getShort(0) & 0xFFFF) != 0x0003) throw new IOException("Manifest is not binary XML");
+                  int hdr = b.getShort(2) & 0xFFFF;
+                  int poolStart = hdr;
+                  if ((b.getShort(poolStart) & 0xFFFF) != 0x0001) throw new IOException("String pool not found");
+                  int poolHdr = b.getShort(poolStart + 2) & 0xFFFF;
+                  int poolSize = b.getInt(poolStart + 4);
+                  int count = b.getInt(poolStart + 8);
+                  int styleCount = b.getInt(poolStart + 12);
+                  int flags = b.getInt(poolStart + 16);
+                  int stringsStart = b.getInt(poolStart + 20);
+                  if (poolHdr != 28) throw new IOException("Unexpected pool header");
+                  if (styleCount != 0) throw new IOException("Styled strings not supported");
+                  boolean utf8 = (flags & 0x100) != 0;
+
+                  String[] strs = new String[count];
+                  for (int i = 0; i < count; i++) {
+                      int off = b.getInt(poolStart + 28 + 4 * i);
+                      int p = poolStart + stringsStart + off;
+                      strs[i] = utf8 ? readUtf8(in, p) : readUtf16(b, p);
+                  }
+
+                  Set<String> found = new HashSet<>();
+                  for (int i = 0; i < count; i++) {
+                      if (rep.containsKey(strs[i])) {
+                          found.add(strs[i]);
+                          strs[i] = rep.get(strs[i]);
+                      }
+                  }
+                  for (String k : rep.keySet()) {
+                      if (!found.contains(k)) throw new IOException("Template placeholder not found: " + k);
+                  }
+
+                  ByteArrayOutputStream data = new ByteArrayOutputStream();
+                  int[] offs = new int[count];
+                  for (int i = 0; i < count; i++) {
+                      offs[i] = data.size();
+                      if (utf8) writeUtf8(data, strs[i]);
+                      else writeUtf16(data, strs[i]);
+                  }
+                  while (data.size() % 4 != 0) data.write(0);
+                  int newStringsStart = 28 + 4 * count;
+                  int newPoolSize = newStringsStart + data.size();
+
+                  int restStart = poolStart + poolSize;
+                  int restLen = in.length - restStart;
+                  if (restLen < 0) throw new IOException("Bad pool size");
+
+                  ByteBuffer o = ByteBuffer.allocate(hdr + newPoolSize + restLen).order(ByteOrder.LITTLE_ENDIAN);
+                  o.put(in, 0, hdr);
+                  o.putInt(4, hdr + newPoolSize + restLen);
+                  o.position(hdr);
+                  o.putShort((short) 0x0001);
+                  o.putShort((short) 28);
+                  o.putInt(newPoolSize);
+                  o.putInt(count);
+                  o.putInt(0);
+                  o.putInt(flags);
+                  o.putInt(newStringsStart);
+                  o.putInt(0);
+                  for (int i = 0; i < count; i++) o.putInt(offs[i]);
+                  o.put(data.toByteArray());
+                  o.put(in, restStart, restLen);
+                  return o.array();
+              }
+
+              private static String readUtf8(byte[] in, int p) {
+                  if ((in[p] & 0x80) != 0) p += 2;
+                  else p += 1;
+                  int n = in[p] & 0xFF;
+                  p++;
+                  if ((n & 0x80) != 0) {
+                      n = ((n & 0x7F) << 8) | (in[p] & 0xFF);
+                      p++;
+                  }
+                  return new String(in, p, n, StandardCharsets.UTF_8);
+              }
+
+              private static String readUtf16(ByteBuffer b, int p) {
+                  int n = b.getShort(p) & 0xFFFF;
+                  p += 2;
+                  if ((n & 0x8000) != 0) {
+                      n = ((n & 0x7FFF) << 16) | (b.getShort(p) & 0xFFFF);
+                      p += 2;
+                  }
+                  char[] c = new char[n];
+                  for (int j = 0; j < n; j++) c[j] = (char) (b.getShort(p + 2 * j) & 0xFFFF);
+                  return new String(c);
+              }
+
+              private static void writeLen8(ByteArrayOutputStream o, int v) throws IOException {
+                  if (v > 0x7FFF) throw new IOException("String too long");
+                  if (v > 0x7F) {
+                      o.write((v >> 8) | 0x80);
+                      o.write(v & 0xFF);
+                  } else {
+                      o.write(v);
+                  }
+              }
+
+              private static void writeUtf8(ByteArrayOutputStream o, String s) throws IOException {
+                  byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
+                  writeLen8(o, s.length());
+                  writeLen8(o, bytes.length);
+                  o.write(bytes, 0, bytes.length);
+                  o.write(0);
+              }
+
+              private static void writeUtf16(ByteArrayOutputStream o, String s) throws IOException {
+                  int n = s.length();
+                  if (n > 0x7FFF) throw new IOException("String too long");
+                  o.write(n & 0xFF);
+                  o.write((n >> 8) & 0xFF);
+                  for (int i = 0; i < n; i++) {
+                      char c = s.charAt(i);
+                      o.write(c & 0xFF);
+                      o.write((c >> 8) & 0xFF);
+                  }
+                  o.write(0);
+                  o.write(0);
+              }
+          }
+          EOF
+          cat > converter/app/src/main/java/com/webapp/maker/ZipWriter.java <<'EOF'
+          package com.webapp.maker;
+
+          import java.io.ByteArrayOutputStream;
+          import java.io.Closeable;
+          import java.io.IOException;
+          import java.io.OutputStream;
+          import java.nio.ByteBuffer;
+          import java.nio.ByteOrder;
+          import java.nio.charset.StandardCharsets;
+          import java.util.ArrayList;
+          import java.util.HashSet;
+          import java.util.List;
+          import java.util.Set;
+          import java.util.zip.CRC32;
+          import java.util.zip.Deflater;
+
+          /** Minimal ZIP writer. Stored entries are 4-byte aligned (needed for resources.arsc). */
+          public class ZipWriter implements Closeable {
+              private final OutputStream out;
+              private long pos = 0;
+              private final List<byte[]> central = new ArrayList<>();
+              private final Set<String> names = new HashSet<>();
+              private boolean finished = false;
+              private static final int DOS_DATE = ((2026 - 1980) << 9) | (1 << 5) | 1;
+
+              public ZipWriter(OutputStream o) {
+                  this.out = o;
+              }
+
+              public boolean has(String name) {
+                  return names.contains(name);
+              }
+
+              private void w(byte[] b) throws IOException {
+                  out.write(b);
+                  pos += b.length;
+              }
+
+              private static byte[] deflate(byte[] data) {
+                  Deflater d = new Deflater(6, true);
+                  d.setInput(data);
+                  d.finish();
+                  ByteArrayOutputStream bo = new ByteArrayOutputStream(Math.max(64, data.length / 2));
+                  byte[] buf = new byte[65536];
+                  while (!d.finished()) {
+                      int n = d.deflate(buf);
+                      bo.write(buf, 0, n);
+                  }
+                  d.end();
+                  return bo.toByteArray();
+              }
+
+              private static boolean isAscii(byte[] b) {
+                  for (byte x : b) {
+                      if (x < 0) return false;
+                  }
+                  return true;
+              }
+
+              public void add(String name, byte[] data, boolean stored) throws IOException {
+                  if (!names.add(name)) return;
+                  if (names.size() > 65000) throw new IOException("Too many files in ZIP");
+                  if (pos > 0x7FFFFFF0L) throw new IOException("APK too large");
+                  byte[] nb = name.getBytes(StandardCharsets.UTF_8);
+                  CRC32 crc = new CRC32();
+                  crc.update(data, 0, data.length);
+                  byte[] body = data;
+                  int method = 0;
+                  if (!stored && data.length > 64) {
+                      byte[] d = deflate(data);
+                      if (d.length < data.length) {
+                          body = d;
+                          method = 8;
+                      }
+                  }
+                  int extraLen = 0;
+                  if (stored) {
+                      long start = pos + 30 + nb.length;
+                      int pad = (int) ((4 - (start % 4)) % 4);
+                      if (pad != 0) extraLen = pad + 4;
+                  }
+                  int flags = isAscii(nb) ? 0 : 0x0800;
+                  ByteBuffer lh = ByteBuffer.allocate(30 + nb.length + extraLen).order(ByteOrder.LITTLE_ENDIAN);
+                  lh.putInt(0x04034b50);
+                  lh.putShort((short) 20);
+                  lh.putShort((short) flags);
+                  lh.putShort((short) method);
+                  lh.putShort((short) 0);
+                  lh.putShort((short) DOS_DATE);
+                  lh.putInt((int) crc.getValue());
+                  lh.putInt(body.length);
+                  lh.putInt(data.length);
+                  lh.putShort((short) nb.length);
+                  lh.putShort((short) extraLen);
+                  lh.put(nb);
+                  if (extraLen > 0) {
+                      lh.putShort((short) 0xD935);
+                      lh.putShort((short) (extraLen - 4));
+                      lh.put(new byte[extraLen - 4]);
+                  }
+                  long offset = pos;
+                  w(lh.array());
+                  w(body);
+
+                  ByteBuffer ch = ByteBuffer.allocate(46 + nb.length).order(ByteOrder.LITTLE_ENDIAN);
+                  ch.putInt(0x02014b50);
+                  ch.putShort((short) 20);
+                  ch.putShort((short) 20);
+                  ch.putShort((short) flags);
+                  ch.putShort((short) method);
+                  ch.putShort((short) 0);
+                  ch.putShort((short) DOS_DATE);
+                  ch.putInt((int) crc.getValue());
+                  ch.putInt(body.length);
+                  ch.putInt(data.length);
+                  ch.putShort((short) nb.length);
+                  ch.putShort((short) 0);
+                  ch.putShort((short) 0);
+                  ch.putShort((short) 0);
+                  ch.putShort((short) 0);
+                  ch.putInt(0);
+                  ch.putInt((int) offset);
+                  ch.put(nb);
+                  central.add(ch.array());
+              }
+
+              public void finish() throws IOException {
+                  if (finished) return;
+                  finished = true;
+                  long cdStart = pos;
+                  for (byte[] c : central) w(c);
+                  long cdSize = pos - cdStart;
+                  ByteBuffer e = ByteBuffer.allocate(22).order(ByteOrder.LITTLE_ENDIAN);
+                  e.putInt(0x06054b50);
+                  e.putShort((short) 0);
+                  e.putShort((short) 0);
+                  e.putShort((short) central.size());
+                  e.putShort((short) central.size());
+                  e.putInt((int) cdSize);
+                  e.putInt((int) cdStart);
+                  e.putShort((short) 0);
+                  w(e.array());
+                  out.flush();
+              }
+
+              @Override
+              public void close() throws IOException {
+                  try {
+                      finish();
+                  } finally {
+                      out.close();
+                  }
+              }
+          }
+          EOF
+
+      - name: Create icons
+        run: |
+          mkdir -p template/app/src/main/res/mipmap-xxxhdpi converter/app/src/main/res/mipmap-xxxhdpi
+          python3 - <<'PYEOF'
+          import zlib, struct
+          def make(path, rgb):
+              w = h = 192
+              raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
+              def ch(t, d):
+                  c = struct.pack(">I", len(d)) + t + d
+                  return c + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+              png = b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + ch(b"IDAT", zlib.compress(raw)) + ch(b"IEND", b"")
+              open(path, "wb").write(png)
+          make("template/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png", (30, 100, 220))
+          make("converter/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png", (19, 128, 74))
+          PYEOF
+
+      - name: Build template APK
+        run: |
+          cd template
+          gradle assembleRelease --no-daemon
+          ls -la app/build/outputs/apk/release/
+      - name: Prepare signing key and template
+        run: |
+          mkdir -p converter/app/src/main/assets
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/key.pem -out /tmp/cert.pem -days 36500 -subj "/CN=WebApp Maker"
+          openssl pkcs8 -topk8 -nocrypt -in /tmp/key.pem -outform DER -out converter/app/src/main/assets/sign.pk8
+          openssl x509 -in /tmp/cert.pem -outform DER -out converter/app/src/main/assets/sign.crt
+          cp template/app/build/outputs/apk/release/app-release-unsigned.apk converter/app/src/main/assets/template.apk
+          ls -la converter/app/src/main/assets/
+      - name: Build converter APK
+        run: |
+          cd converter
+          gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: converter-apk
+          path: converter/app/build/outputs/apk/debug/app-debug.apk
